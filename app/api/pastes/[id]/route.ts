@@ -1,72 +1,100 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPaste, kvClient } from '@/lib/kv';
-import { getCurrentTime, isPasteExpired, isViewLimitExceeded } from '@/lib/time';
+import { getPaste, incrementViewCount, deletePaste } from '@/lib/kv';
+import { getCurrentTime } from '@/lib/time';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { id } = params;
-    const paste = await getPaste(id);
+    const paste = await getPaste(params.id);
 
     if (!paste) {
       return NextResponse.json(
         { error: 'Paste not found' },
-        { status: 404 }
+        { 
+          status: 404,
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
       );
     }
 
-    // Get current time (considering test mode)
-    const testNowMs = request.headers.get('x-test-now-ms') || undefined;
-    const currentTime = getCurrentTime(testNowMs);
+    // Get current time (supports TEST_MODE with x-test-now-ms header)
+    const now = getCurrentTime(request);
 
     // Check if expired
-    if (isPasteExpired(paste.expiresAt, currentTime)) {
+    if (paste.expiresAt && now >= paste.expiresAt) {
+      await deletePaste(params.id);
       return NextResponse.json(
         { error: 'Paste has expired' },
-        { status: 404 }
+        { 
+          status: 404,
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
       );
     }
 
-    // Check if view limit exceeded BEFORE incrementing
-    if (isViewLimitExceeded(paste.maxViews, paste.viewCount)) {
+    // Check view limit BEFORE incrementing
+    // If already at or over limit, delete and return 404
+    if (paste.maxViews !== null && paste.viewCount >= paste.maxViews) {
+      await deletePaste(params.id);
       return NextResponse.json(
         { error: 'Paste view limit exceeded' },
-        { status: 404 }
+        { 
+          status: 404,
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
       );
     }
 
-    // Increment view count atomically
-    await kvClient.hincrby(`paste:${id}`, 'viewCount', 1);
-    
-    // Get updated paste to return correct remaining views
-    const updatedPaste = await getPaste(id);
-    if (!updatedPaste) {
-      return NextResponse.json(
-        { error: 'Paste not found' },
-        { status: 404 }
+    // Increment view count
+    const updatedPaste = await incrementViewCount(paste);
+
+    // Check if THIS view reached the limit
+    // If so, delete the paste after serving this final view
+    if (updatedPaste.maxViews !== null && updatedPaste.viewCount >= updatedPaste.maxViews) {
+      // Delete in background (don't await to avoid slowing response)
+      deletePaste(params.id).catch(err => 
+        console.error('Error deleting paste after final view:', err)
       );
     }
 
-    const remainingViews = paste.maxViews !== null 
-      ? Math.max(0, paste.maxViews - updatedPaste.viewCount)
+    // Calculate remaining views
+    const remaining_views = updatedPaste.maxViews !== null
+      ? Math.max(0, updatedPaste.maxViews - updatedPaste.viewCount)
       : null;
 
-    const expiresAt = paste.expiresAt 
-      ? new Date(paste.expiresAt).toISOString() 
-      : null;
-
-    return NextResponse.json({
-      content: paste.content,
-      remaining_views: remainingViews,
-      expires_at: expiresAt,
-    });
+    return NextResponse.json(
+      {
+        content: updatedPaste.content,
+        remaining_views,
+        expires_at: updatedPaste.expiresAt 
+          ? new Date(updatedPaste.expiresAt).toISOString() 
+          : null,
+      },
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
   } catch (error) {
     console.error('Error fetching paste:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
-      { status: 500 }
+      { 
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
     );
   }
 }
