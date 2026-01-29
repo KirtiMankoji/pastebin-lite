@@ -22,7 +22,8 @@ export async function GET(
     }
 
     // Get current time (supports TEST_MODE with x-test-now-ms header)
-    const now = getCurrentTime(request);
+    const testNowHeader = request.headers.get('x-test-now-ms');
+    const now = getCurrentTime(testNowHeader || undefined);
 
     // Check if expired
     if (paste.expiresAt && now >= paste.expiresAt) {
