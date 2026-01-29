@@ -39,7 +39,6 @@ export async function GET(
     }
 
     // Check view limit BEFORE incrementing
-    // If already at or over limit, delete and return 404
     if (paste.maxViews !== null && paste.viewCount >= paste.maxViews) {
       await deletePaste(params.id);
       return NextResponse.json(
@@ -57,9 +56,8 @@ export async function GET(
     const updatedPaste = await incrementViewCount(paste);
 
     // Check if THIS view reached the limit
-    // If so, delete the paste after serving this final view
     if (updatedPaste.maxViews !== null && updatedPaste.viewCount >= updatedPaste.maxViews) {
-      // Delete in background (don't await to avoid slowing response)
+      // Delete in background
       deletePaste(params.id).catch(err => 
         console.error('Error deleting paste after final view:', err)
       );
