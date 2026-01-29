@@ -9,22 +9,7 @@ export interface Paste {
   viewCount: number;
 }
 
-// Create a safe wrapper that checks for environment variables
-function getKVClient() {
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  
-  if (!url || !token) {
-    throw new Error(
-      'Redis environment variables not configured. ' +
-      'Please connect the Redis database in Vercel Dashboard > Storage.'
-    );
-  }
-  
-  return kv;
-}
-
-export const kvClient = getKVClient();
+export const kvClient = kv;
 
 export async function getPaste(id: string): Promise<Paste | null> {
   try {
@@ -34,7 +19,6 @@ export async function getPaste(id: string): Promise<Paste | null> {
       return null;
     }
     
-    // If data is a string, parse it; otherwise use as-is
     const paste = typeof pasteData === 'string' 
       ? JSON.parse(pasteData) 
       : pasteData;
@@ -50,10 +34,8 @@ export async function createPaste(paste: Paste): Promise<void> {
   const key = `paste:${paste.id}`;
   
   try {
-    // Store the paste as JSON string
     await kvClient.set(key, JSON.stringify(paste));
     
-    // Set TTL if expiry is defined
     if (paste.expiresAt) {
       const ttlSeconds = Math.ceil((paste.expiresAt - Date.now()) / 1000);
       if (ttlSeconds > 0) {
@@ -70,16 +52,13 @@ export async function incrementViewCount(paste: Paste): Promise<Paste> {
   const key = `paste:${paste.id}`;
   
   try {
-    // Create updated paste with incremented view count
     const updatedPaste: Paste = {
       ...paste,
       viewCount: paste.viewCount + 1
     };
     
-    // Store the updated paste
     await kvClient.set(key, JSON.stringify(updatedPaste));
     
-    // Re-apply TTL if it exists
     if (updatedPaste.expiresAt) {
       const ttlSeconds = Math.ceil((updatedPaste.expiresAt - Date.now()) / 1000);
       if (ttlSeconds > 0) {
